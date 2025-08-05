@@ -1,2 +1,2 @@
-# Yaz-l-m-Staj-
+a
 Oracle 19c veritabanına kurulan bir kurgu.
