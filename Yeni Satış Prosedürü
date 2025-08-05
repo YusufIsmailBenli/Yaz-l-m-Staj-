@@ -1,0 +1,98 @@
+PROCEDURE P_YENI_SATIS_ISLEMI(
+    p_mevcut_musteri_id        IN NUMBER,
+    p_musteri_ad               IN VARCHAR2,
+    p_musteri_soyad            IN VARCHAR2,
+    p_musteri_telefon          IN VARCHAR2,
+    p_musteri_eposta           IN VARCHAR2,
+    p_musteri_adres            IN VARCHAR2,
+    p_musteri_tc_kimlik_no     IN VARCHAR2,
+    p_arac_id                  IN NUMBER,
+    p_calisan_id               IN NUMBER,
+    p_sube_id                  IN NUMBER,
+    p_odeme_yontemi            IN VARCHAR2,
+    p_taksit_sayisi            IN NUMBER,
+    p_garanti_suresi_yil       IN NUMBER,
+    p_satis_tarihi             IN DATE
+) 
+IS
+    v_musteri_id_yeni          NUMBER;
+    v_arac_fiyati              NUMBER(10,2);
+    v_vade_farki_orani         NUMBER(5,2);
+    v_nihai_satis_fiyati       NUMBER(18,2);
+    v_satis_id                 NUMBER;
+    v_taksit_tutari            NUMBER(18,2);
+
+    -- Prosedürün faturasız versiyonunda fatura ile ilgili değişkenler çıkarıldı.
+    -- Sadece satış kaydı, araç durumu ve çalışan istatistikleri güncellenecektir.
+
+    PROCEDURE guncelle_arac_durumu(p_arac_id IN NUMBER) IS
+        PRAGMA AUTONOMOUS_TRANSACTION;
+    BEGIN
+        UPDATE SUBE1_DB_USER.ARACLAR 
+        SET DURUM = 'SATILDI' 
+        WHERE ARAC_ID = p_arac_id;
+        COMMIT;
+    END guncelle_arac_durumu;
+
+BEGIN
+    -- Müşteri bilgileri kontrol ediliyor
+    IF p_mevcut_musteri_id IS NULL THEN
+        INSERT INTO SUBE1_DB_USER.MUSTERILER (
+            MUSTERI_ID, AD, SOYAD, TELEFON, EPOSTA, ADRES, TC_KIMLIK_NO
+        ) VALUES (
+            MUSTERILER_ID_SEQ.NEXTVAL, p_musteri_ad, p_musteri_soyad, 
+            p_musteri_telefon, p_musteri_eposta, p_musteri_adres, p_musteri_tc_kimlik_no
+        )
+        RETURNING MUSTERI_ID INTO v_musteri_id_yeni;
+    ELSE
+        v_musteri_id_yeni := p_mevcut_musteri_id;
+    END IF;
+
+    -- Fiyat ve taksit bilgileri hesaplanıyor
+    SELECT SATIS_FIYATI 
+    INTO v_arac_fiyati 
+    FROM SUBE1_DB_USER.ARACLAR 
+    WHERE ARAC_ID = p_arac_id;
+
+    SELECT VADE_FARKI_ORANI 
+    INTO v_vade_farki_orani 
+    FROM SUBE1_DB_USER.VADE_ORANLARI 
+    WHERE TAKSIT_SAYISI = p_taksit_sayisi;
+
+    v_nihai_satis_fiyati := v_arac_fiyati * v_vade_farki_orani;
+    v_taksit_tutari := v_nihai_satis_fiyati / p_taksit_sayisi;
+
+    -- SATISLAR tablosuna kayıt ekleniyor
+    INSERT INTO SUBE1_DB_USER.SATISLAR (
+        SATIS_ID, ARAC_ID, MUSTERI_ID, CALISAN_ID, SUBE_ID, 
+        SATIS_TARIHI, NIHAI_SATIS_FIYATI, ODEME_YONTEMI, 
+        TAKSIT_SAYISI, AYLIK_TAKSIT_TUTARI, 
+        GARANTI_SURESI_YIL, GARANTI_BITIS_TARIHI
+    ) VALUES (
+        SATISLAR_ID_SEQ.NEXTVAL, p_arac_id, v_musteri_id_yeni, 
+        p_calisan_id, p_sube_id, p_satis_tarihi, 
+        v_nihai_satis_fiyati, p_odeme_yontemi, 
+        p_taksit_sayisi, v_taksit_tutari, 
+        p_garanti_suresi_yil, ADD_MONTHS(p_satis_tarihi, p_garanti_suresi_yil * 12)
+    )
+    RETURNING SATIS_ID INTO v_satis_id;
+
+    -- Araç durumu 'SATILDI' olarak güncelleniyor
+    guncelle_arac_durumu(p_arac_id);
+
+    -- Çalışan satış istatistikleri güncelleniyor
+    UPDATE SUBE1_DB_USER.CALISANLAR 
+    SET TOPLAM_SATIS_ADEDI = NVL(TOPLAM_SATIS_ADEDI, 0) + 1 
+    WHERE CALISAN_ID = p_calisan_id;
+
+    UPDATE SUBE1_DB_USER.CALISANLAR 
+    SET KUMULE_SATIS_CIROSU = NVL(KUMULE_SATIS_CIROSU, 0) + v_nihai_satis_fiyati 
+    WHERE CALISAN_ID = p_calisan_id;
+
+    COMMIT;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('Hata oluştu: ' || SQLERRM);
+END;
