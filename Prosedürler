@@ -1,0 +1,197 @@
+SET SERVEROUTPUT ON;
+
+CREATE OR REPLACE PROCEDURE SP_MUSTERI_EKLE_GUNCELLE (
+    p_ad IN VARCHAR2,
+    p_soyad IN VARCHAR2,
+    p_telefon IN VARCHAR2 DEFAULT NULL,
+    p_eposta IN VARCHAR2 DEFAULT NULL,
+    p_adres IN VARCHAR2 DEFAULT NULL,
+    p_tc_kimlik_no IN VARCHAR2 DEFAULT NULL,
+    p_musteri_id OUT NUMBER
+)
+AS
+    v_musteri_id NUMBER;
+BEGIN
+    IF p_tc_kimlik_no IS NOT NULL THEN
+        SELECT MUSTERI_ID INTO v_musteri_id
+        FROM MUSTERILER
+        WHERE TC_KIMLIK_NO = p_tc_kimlik_no;
+
+        UPDATE MUSTERILER
+        SET AD = p_ad,
+            SOYAD = p_soyad,
+            TELEFON = NVL(p_telefon, TELEFON),
+            EPOSTA = NVL(p_eposta, EPOSTA),
+            ADRES = NVL(p_adres, ADRES)
+        WHERE MUSTERI_ID = v_musteri_id;
+    ELSE
+        v_musteri_id := MUSTERILER_SEQ.NEXTVAL;
+        INSERT INTO MUSTERILER (MUSTERI_ID, AD, SOYAD, TELEFON, EPOSTA, ADRES, TC_KIMLIK_NO)
+        VALUES (v_musteri_id, p_ad, p_soyad, p_telefon, p_eposta, p_adres, p_tc_kimlik_no);
+    END IF;
+
+    p_musteri_id := v_musteri_id;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        v_musteri_id := MUSTERILER_SEQ.NEXTVAL;
+        INSERT INTO MUSTERILER (MUSTERI_ID, AD, SOYAD, TELEFON, EPOSTA, ADRES, TC_KIMLIK_NO)
+        VALUES (v_musteri_id, p_ad, p_soyad, p_telefon, p_eposta, p_adres, p_tc_kimlik_no);
+        p_musteri_id := v_musteri_id;
+
+    WHEN DUP_VAL_ON_INDEX THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Bu TC Kimlik Numarası zaten kayıtlı.');
+END;
+
+CREATE OR REPLACE PROCEDURE SP_POTANSIYEL_MUSTERI_EKLE (
+    p_ad IN VARCHAR2,
+    p_soyad IN VARCHAR2,
+    p_telefon IN VARCHAR2,
+    p_eposta IN VARCHAR2,
+    p_ilgi_duyulan_arac_id IN NUMBER DEFAULT NULL,
+    p_kaynak IN VARCHAR2 DEFAULT 'Web Sitesi',
+    p_lead_id OUT NUMBER
+)
+AS
+BEGIN
+    p_lead_id := POTANSIYEL_MUSTERILER_SEQ.NEXTVAL;
+    INSERT INTO POTANSIYEL_MUSTERILER (LEAD_ID, AD, SOYAD, TELEFON, EPOSTA, ILGI_DUYULAN_ARAC_ID, KAYNAK)
+    VALUES (p_lead_id, p_ad, p_soyad, p_telefon, p_eposta, p_ilgi_duyulan_arac_id, p_kaynak);
+END;
+
+CREATE OR REPLACE PROCEDURE SP_ARAC_SATIS (
+    p_arac_id IN NUMBER,
+    p_musteri_id IN NUMBER,
+    p_calisan_id IN NUMBER,
+    p_satis_tarihi IN DATE,
+    p_nihai_satis_fiyati IN NUMBER,
+    p_odeme_yontemi IN VARCHAR2,
+    p_taksit_sayisi IN NUMBER DEFAULT NULL,
+    p_aylik_taksit_tutari IN NUMBER DEFAULT NULL,
+    p_garanti_suresi_yil IN NUMBER,
+    p_sube_id IN NUMBER,
+    p_satis_id OUT NUMBER
+)
+AS
+    v_garanti_bitis_tarihi DATE;
+BEGIN
+    UPDATE ARACLAR
+    SET DURUM = 'Satildi'
+    WHERE ARAC_ID = p_arac_id;
+
+    v_garanti_bitis_tarihi := ADD_MONTHS(p_satis_tarihi, p_garanti_suresi_yil * 12);
+
+    p_satis_id := SATISLAR_SEQ.NEXTVAL;
+    INSERT INTO SATISLAR (
+        SATIS_ID, ARAC_ID, MUSTERI_ID, CALISAN_ID, SUBE_ID, SATIS_TARIHI, NIHAI_SATIS_FIYAT,
+        ODEME_YONTEMI, TAKSIT_SAYISI, AYLIK_TAKSIT_TUTAR, GARANTI_SURESI_YIL, GARANTI_BITIS_TARIHI
+    )
+    VALUES (
+        p_satis_id, p_arac_id, p_musteri_id, p_calisan_id, p_sube_id, p_satis_tarihi,
+        p_nihai_satis_fiyati, p_odeme_yontemi, p_taksit_sayisi, p_aylik_taksit_tutari,
+        p_garanti_suresi_yil, v_garanti_bitis_tarihi
+    );
+
+    IF p_odeme_yontemi = 'Taksitli' AND p_taksit_sayisi IS NOT NULL AND p_aylik_taksit_tutari IS NOT NULL THEN
+        FOR i IN 1..p_taksit_sayisi LOOP
+            INSERT INTO TAKSIT_ODEMELERI (
+                TAKSIT_ID, SATIS_ID, TAKSIT_SIRA_NO, ODENMESI_GEREKEN_TARIH, DURUM
+            ) VALUES (
+                TAKSIT_ODEMELERI_SEQ.NEXTVAL, p_satis_id, i, ADD_MONTHS(p_satis_tarihi, i), 'Odenmedi'
+            );
+        END LOOP;
+    END IF;
+
+    UPDATE CALISANLAR
+    SET TOPLAM_SATIS_ADET = TOPLAM_SATIS_ADET + 1,
+        KUMULE_SATIS_CIROS = KUMULE_SATIS_CIROS + p_nihai_satis_fiyati
+    WHERE CALISAN_ID = p_calisan_id;
+
+    INSERT INTO FATURALAR (
+        FATURA_ID, SATIS_ID, FATURA_TARIHI, KDV_ORANI, TOPLAM_TUTAR, ODEME_DURUM
+    ) VALUES (
+        FATURALAR_SEQ.NEXTVAL, p_satis_id, SYSDATE, 0.18, p_nihai_satis_fiyati * 1.18, 'Bekleniyor'
+    );
+
+    COMMIT;
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        RAISE;
+END;
+
+CREATE OR REPLACE PROCEDURE SP_RANDEVU_OLUSTUR (
+    p_musteri_id IN NUMBER,
+    p_arac_id IN NUMBER DEFAULT NULL,
+    p_calisan_id IN NUMBER,
+    p_randevu_tarih_saat IN TIMESTAMP,
+    p_randevu_tipi IN VARCHAR2,
+    p_sube_id IN NUMBER,
+    p_randevu_id OUT NUMBER
+)
+AS
+BEGIN
+    p_randevu_id := RANDEVULAR_SEQ.NEXTVAL;
+    INSERT INTO RANDEVULAR (
+        RANDEVU_ID, MUSTERI_ID, ARAC_ID, CALISAN_ID, RANDEVU_TARIH_SAAT, RANDEVU_TIPI, SUBE_ID
+    )
+    VALUES (
+        p_randevu_id, p_musteri_id, p_arac_id, p_calisan_id, p_randevu_tarih_saat, p_randevu_tipi, p_sube_id
+    );
+END;
+
+CREATE OR REPLACE FUNCTION FN_GET_STOK_ADET (
+    p_marka_id IN NUMBER,
+    p_model_id IN NUMBER,
+    p_sube_id IN NUMBER DEFAULT NULL
+)
+RETURN NUMBER
+IS
+    v_stok_adet NUMBER := 0;
+BEGIN
+    IF p_sube_id IS NULL THEN
+        SELECT COUNT(*) INTO v_stok_adet
+        FROM ARACLAR
+        WHERE MARKA_ID = p_marka_id
+          AND MODEL_ID = p_model_id
+          AND DURUM = 'Stokta';
+    ELSE
+        SELECT COUNT(*) INTO v_stok_adet
+        FROM ARACLAR
+        WHERE MARKA_ID = p_marka_id
+          AND MODEL_ID = p_model_id
+          AND SUBE_ID = p_sube_id
+          AND DURUM = 'Stokta';
+    END IF;
+
+    RETURN v_stok_adet;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN RETURN 0;
+    WHEN OTHERS THEN RAISE;
+END;
+
+CREATE OR REPLACE TRIGGER TRG_ARAC_STOK_UYARI
+AFTER INSERT OR UPDATE OR DELETE ON ARACLAR
+FOR EACH ROW
+DECLARE
+    v_mevcut_stok NUMBER;
+    v_esik_deger NUMBER := 5;
+BEGIN
+    v_mevcut_stok := FN_GET_STOK_ADET(:NEW.MARKA_ID, :NEW.MODEL_ID, :NEW.SUBE_ID);
+
+    IF v_mevcut_stok <= v_esik_deger AND :NEW.DURUM = 'Satildi' THEN
+        INSERT INTO STOK_UYARI_LOG (
+            UYARI_ID, UYARI_TARIH, MARKA_ID, MODEL_ID, MEVCUT_STOK, ESIK_DEGER, UYARI_MESAJI, SUBE_ID
+        ) VALUES (
+            STOK_UYARI_LOG_SEQ.NEXTVAL,
+            SYSTIMESTAMP,
+            :NEW.MARKA_ID,
+            :NEW.MODEL_ID,
+            v_mevcut_stok,
+            v_esik_deger,
+            'Stok adedi: ' ||
+            (SELECT MARKA_AD FROM MARKA_TANIMLARI WHERE MARKA_ID = :NEW.MARKA_ID) || ' - ' ||
+            (SELECT MODEL_AD FROM MODEL_TANIMLARI WHERE MODEL_ID = :NEW.MODEL_ID) || ' modeli stok adedi ' || v_mevcut_stok || ' adede düştü.',
+            :NEW.SUBE_ID
+        );
+    END IF;
+END;
