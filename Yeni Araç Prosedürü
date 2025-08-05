@@ -1,0 +1,79 @@
+PROCEDURE P_YENI_ARAC_GIRISI (
+    p_marka_id        IN NUMBER,
+    p_model_id        IN NUMBER,
+    p_uretim_yili     IN NUMBER,
+    p_kasa_tipi       IN VARCHAR2,
+    p_motor_hacmi     IN NUMBER,
+    p_beygir_gucu     IN NUMBER,
+    p_tork            IN NUMBER,
+    p_vites_tipi      IN VARCHAR2,
+    p_yakit_tipi      IN VARCHAR2,
+    p_renk            IN VARCHAR2,
+    p_satis_fiyati    IN NUMBER,
+    p_sube_id         IN NUMBER
+) IS
+    v_arac_id     NUMBER;
+    v_vin         VARCHAR2(50);
+    v_marka_adi   VARCHAR2(50);
+    v_model_adi   VARCHAR2(50);
+BEGIN
+    -- Marka ve model adlarını ID’ye göre al
+    SELECT MARKA_AD INTO v_marka_adi
+    FROM MARKA_TANIMLARI
+    WHERE MARKA_ID = p_marka_id;
+
+    SELECT MODEL_AD INTO v_model_adi
+    FROM MODEL_TANIMLARI
+    WHERE MODEL_ID = p_model_id;
+
+    -- Yeni ARAC_ID ve VIN oluştur
+    SELECT ARACLAR_ID_SEQ.NEXTVAL INTO v_arac_id FROM DUAL;
+    v_vin := 'VIN' || LPAD(v_arac_id, 17, '0');
+
+    -- ARACLAR tablosuna kayıt ekle
+    INSERT INTO SUBE1_DB_USER.ARACLAR (
+        ARAC_ID,
+        VIN,
+        MARKA_ID,
+        MODEL_ID,
+        URETIM_YILI,
+        KASA_TIPI,
+        MOTOR_HACMI_CC,
+        BEYGIR_GUCU,
+        TORK,
+        VITES_TIPI,
+        YAKIT_TIPI,
+        RENK,
+        DURUM,
+        SATIS_FIYATI,
+        SUBE_ID
+    ) VALUES (
+        v_arac_id,
+        v_vin,
+        p_marka_id,
+        p_model_id,
+        p_uretim_yili,
+        p_kasa_tipi,
+        p_motor_hacmi,
+        p_beygir_gucu,
+        p_tork,
+        p_vites_tipi,
+        p_yakit_tipi,
+        p_renk,
+        'STOKTA',
+        p_satis_fiyati,
+        p_sube_id
+    );
+
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Yeni araç kaydı başarıyla eklendi.');
+
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('Hata oluştu: Girdiğiniz Marka veya Model ID bulunamadı.');
+
+    WHEN OTHERS THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('Hata oluştu: ' || SQLERRM);
+END;
