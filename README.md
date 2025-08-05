@@ -1,2 +1,2 @@
-a
-Oracle 19c veritabanına kurulan bir kurgu.
+# YAZILIM STAJI
+Oracle 19c Database kullanılarak yapılan bir kurgu.
